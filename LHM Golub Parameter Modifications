@@ -1,0 +1,256 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+Created on Wed Sep 26 21:48:57 2018
+
+LHM, modified from MG, as noted below
+
+In addition to the GSEA work (see other files), I initially investigated how some
+changes to normalization, inclusion of samples by P/M/A calling, etc. would affect
+the data. (This is more of a trial-and-error analysis, as opposed to C's more
+comprehensive analysis, done in parallel.)
+
+Ultimately, I found M's unmodified approach to better reproduce the gene lists
+in Golub et al.'s 1999 paper. However, I am listing some alternatives I considered
+here, and some alternatives I considered based on what was written in the paper
+and on the lab's contemporeanous (archival) website.
+
+Code is modified from M's starting framework, with changes as noted (and
+ultimately commented out). See M's original version for rationale of his approach
+and his comments.
+
+Modifications are noted separately, but for the most part, they were tried in
+various combinations.
+
+
+
+Summary:
+
+Having tried a number of other threshold and normalization tactics,
+based on what was listed in the paper and what was listed as standard protocol
+on the authors' website, I have been unable to get a better match for the gene
+list in the paper than M did with simply normalizing using the raw numbers
+(no logs, no thresholding, etc.). Other things I've tried include combinations
+of the following:
+    
+    -Multiplying or dividing by the rescaling factors (in case that wasn't done
+    in this version of the dataset, or unless the unknown transformation tried
+    doing it twice).
+    
+    -Thresholding values below 20 to 20, as described as standard microarray
+    analysis protocol on archival pages of the lab's website from the approximate
+    time of this paper's release. This also involved some follow-up gene removal
+    (genes with only values of 20 after re-scaling had to be removed to avoid
+    dividing by an std of zero at a later step; as these genes were described
+    as being too difficult to detect accurately, it seemed reasonable to remove
+    them).
+    
+    -Taking logs of the data before scoring (their paper includes using the
+    mean and std of the log of the expression data; data had to be modified to
+    make it positive).
+    
+    -Altering which fraction of genes were included (based on A/P/M calls).
+    Some of the genes cited in the paper do not appear to have many P or M calls,
+    which makes me question the validity of their results. More follow-up into
+    reasonable A/P/M thresholds for gene inclusion could be conducted.
+"""
+
+#M's code until noted
+import pandas as pd
+import numpy as np
+import seaborn as sns
+import matplotlib.pyplot as plt
+
+with open("~/data_set_ALL_AML_train.txt") as fh:
+    header = fh.readline().strip().split('\t')
+    
+for i in range(2, len(header) - 1, 2):
+    header[i + 1] = '{}_call'.format(header[i])
+header.append('NULL')
+
+df_with_call = pd.read_table("~/data_set_ALL_AML_train.tsv", names=header, skiprows=1)
+df_with_call = df_with_call.drop('NULL', axis=1)
+
+df_with_call = df_with_call[~df_with_call["Gene Description"].str.contains("control")]
+call_counts = df_with_call[list(df_with_call.filter(regex='call'))].apply(pd.value_counts, axis=1).fillna(0)
+
+
+
+
+
+#Modification spot 1: Variation of gene inclusion based on Present/Maybe/Absent calls
+
+#M's original approach set this to zero and included all of the genes. Interestingly,
+#some of the genes in the authors' top 50 genes (top 25 up and down) have very few
+#non-absent reads (e.g., two of them only have two such reads)
+
+all_present_or_maybe = call_counts[call_counts['P'] + call_counts['M'] >=  0]
+
+
+#Next option: require a certain number of 'P' counts. This goes beyond setting
+#the previous option to 1 or above by dictating that there have been sufficient
+#confidence in the data to produce at least one "P" call. This did not change
+#the results much from similar inputs into the previous line of code for low
+#values of P, however, and the elimination of some of the paper's identified
+#genes at fairly low values reduced the utility of this approach.
+
+#all_present_or_maybe = call_counts[call_counts['P'] > 0]
+
+
+#As another similar approach, tried a fractional strategy based on the M, P, and A counts (need a certain fraction of P and M):
+#all_present_or_maybe = call_counts[(call_counts['P'] + call_counts['M'])/(call_counts['P'] + call_counts['M'] + call_counts['A']) >= 0.2]
+
+
+
+
+
+#Resumption of M's code:
+indexes = all_present_or_maybe.index.values
+df = df_with_call[df_with_call.columns.drop(list(df_with_call.filter(regex='call')))].loc[df_with_call.index.isin(indexes)]
+ALL_id = [str(v) for v in range(1, 28)]
+AML_id = [str(v) for v in range(28, 39)]
+n_df = df.drop("Gene Description", axis=1)
+n_df = n_df.set_index("Gene Accession Number")
+
+
+
+
+
+#Modification spot 2: Normalizing the data
+
+#Option A: Using the rescaling factors to modify the data. I was under the impression
+#from what was documented that the data had already been multiplied by the re-scaling
+#factors. Nevertheless, given that the data had undergone an unknown transformation,
+#I decided to multiply or divide it by the re-scaling factors, in conjunction with
+#other changes noted above and below.
+
+"""
+rfactors = pd.read_table("~/table_ALL_AML_rfactors_tabbed_train.txt", sep = '\t', names=('samp','factor',), skiprows=1)
+
+for i in range(0, 37,1): #Range of training rfactors
+    for j in range(0,37,1): #38 columns, starting with 0
+        if (int(n_df.columns[j]) == int(rfactors.samp[i])):
+            n_df.iloc[:, j] = ((n_df.iloc[:, j]) * rfactors.factor[i]) #Try with * or /
+   
+ """      
+
+#Option B: Threshold the data at 20 (which is what the authors said they did on
+#their website at the time). After that, can optionally take logs. This didn't
+#work very well, as it turns out the data was already normalized (see C's work).
+ 
+#n_df = n_df.apply(lambda x: (np.clip(x,20,a_max=None)), axis = 1)
+#n_df['mean'] = n_df.mean(axis = 1)
+
+#If the mean is exactly 20, that suggests that it is made up entirely of threshold values,
+#and consequently has an sd of 0 (since any value >20 will raise the mean), which will be a problem later.
+
+#def elimThreshold (x):
+#    if x<=20:
+#        return np.nan
+#    else:
+#        return x
+    
+#n_df['mean'] = n_df['mean'].apply(lambda x: elimThreshold(x))
+
+#Drop values with specified mean:
+#n_df = n_df.dropna()
+
+#Get rid of the 'mean' column before doing more calculations
+#n_df = n_df.drop('mean', axis = 1)
+
+#Option C: Log normalization (in conjunction with thresholding to make all of
+#the values positive. Like M's shift of the data above zero, this didn't end up
+#working very wellk likely because the data had already been normalized):
+n_df = n_df.apply(lambda x: (np.log(x)), axis = 1)
+ 
+ 
+ 
+ 
+ 
+ 
+#Resuming M's code:
+ # normalize each row
+n_df = n_df.apply(lambda x: (x - np.mean(x)) / np.std(x), axis=1)
+
+# function to add a columns containing the mean, standard dev and score for each gene
+def score(frame):
+    frame = frame.assign(all_mean=frame.apply(lambda x: x[ALL_id], axis=1).mean(axis=1).values)
+    frame = frame.assign(aml_mean=frame.apply(lambda x: x[AML_id], axis=1).mean(axis=1).values)
+
+    frame = frame.assign(all_sd=frame.apply(lambda x: x[ALL_id], axis=1).std(axis=1).values)
+    frame = frame.assign(aml_sd=frame.apply(lambda x: x[AML_id], axis=1).std(axis=1).values)
+
+    # The scoring function defined in the paper
+    frame = frame.assign(
+        score=frame.apply(
+            lambda x: (x["all_mean"] - x["aml_mean"]) / (x["all_sd"] + x["aml_sd"]), 
+            axis=1
+        )
+    )
+    return frame
+
+scored_df = score(n_df)
+
+scored_df["abs_score"] = scored_df.score.abs()
+
+sorted_gan = scored_df.sort_values("score", ascending=False).index.values
+
+#Visualizing the data - again, M's code, but including it because it's necessary
+#to see how the modifications described above affect the resulting gene lists
+#and plots.
+
+# Gene Accession Numbers from the paper
+AML_bot_paper = ["M55150", "X95735", "U50136", "M16038", "U82759", "M23197", "M84526", "Y12670", "M27891", "X17042", "Y00787", "M96326", "U46751", "M80254", "L08246", "M62762", "M28130", "M63138", "M57710", "M69043", "M81695", "X85116", "M19045", "M83652", "X04085"]
+# Iterate over the genes and print their position in the list
+for i, v in enumerate(reversed(sorted_gan)):
+    for s in AML_bot_paper:
+        if s in v:
+            AML_bot_paper.remove(s)
+            print(i, v)
+print(AML_bot_paper)
+
+# Gene Accession Numbers from the paper
+AML_top_paper = ["U22376","X59417","U05259","M92287","M31211","X74262","D26156","S50223","M31523","L47738","U32944","Z15115","X15949","X63469","M91432","U29175","Z69881","U20998","D38073","U26266","M31303","Y08612","U35451","M29696","M13792"]
+# Iterate over the genes and print their position in the list
+for i, v in enumerate(sorted_gan):
+    for s in AML_top_paper:
+        if s in v:
+            AML_top_paper.remove(s)
+            print(i, v)
+print(AML_top_paper)
+
+# select the best predictor genes for each class
+class_1 = scored_df.nlargest(25, 'score')
+class_2 = scored_df.nsmallest(25, 'score')
+
+# select only the sample columns
+c2 = class_2.loc[:,AML_id + ALL_id]
+
+# sort the columns in order of the sample ids
+c2 = c2[sorted(list(c2), key = lambda x: int(x))]
+
+# Set up the matplotlib figure
+f, ax = plt.subplots(figsize=(15, 9))
+
+# Generate a custom diverging colormap
+cmap = sns.diverging_palette(220, 10, as_cmap=True)
+
+# Draw the heatmap with correct aspect ratio
+sns.heatmap(c2, cmap=cmap, vmax=3, vmin=-3, center=0,
+            square=False, linewidths=.5, cbar_kws={"shrink": .5})
+
+# select only the sample columns
+c1 = class_1.loc[:, AML_id + ALL_id]
+
+# sort the columns in order of the sample ids
+c1 = c1[sorted(list(c1), key = lambda x: int(x))]
+
+# Set up the matplotlib figure
+f, ax = plt.subplots(figsize=(15, 9))
+
+# Generate a custom diverging colormap
+cmap = sns.diverging_palette(220, 10, as_cmap=True)
+
+# Draw the heatmap with correct aspect ratio
+sns.heatmap(c1, cmap=cmap, vmax=3, vmin=-3, center=0,
+            square=False, linewidths=.5, cbar_kws={"shrink": .5})
